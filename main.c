@@ -102,12 +102,47 @@ void my_free(void* ptr) {
         header->next = header->next->next;
     }
 
-    //
+    // Coalesce with previous block if it's free
+    // Need to find previous block by walking from head
+    block_header_t* current = free_list_head;
+    while (current && current->next != header) {
+        current = current->next;
+    }
+
+    if (current && current->is_free) {
+        printf("[COALESCE] Merging with previous block: %zu + %zu\n", current->size, header->size);
+        current->size += sizeof(block_header_t) + header->size;
+        current->next = header->next;
+    }
 }
 
 // Debug function to print memory state
 void print_memory_state() {
+    printf("\n=== Memory State ===\n");
+    block_header_t* current = free_list_head;
+    int block_num = 0;
+    size_t total_free = 0;
+    size_t total_allocated = 0;
 
+    while (current != NULL) {
+        printf("Block %d: size=%zu, %s, addr=%p\n",
+            block_num++,
+            current->size,
+            current->is_free ? "FREE" : "ALLOCATED",
+            (void*)current);
+
+        if (current->is_free) {
+            total_free += current->size;
+        } else {
+            total_allocated += current->size;
+        }
+
+        current = current->next;
+    }
+
+    printf("Total free: %zu bytes\n", total_free);
+    printf("Total used: %zu bytes\n", total_allocated);
+    printf("===================\n\n");
 }
 /*********************
  * Test program code *
@@ -116,5 +151,59 @@ void print_memory_state() {
 int main() {
     printf("Custom Memory Allocator Test\n");
     init_allocator();
+
+    // Test 1: Allocate some memory
+    printf("--- Test 1: Basic Allocation ---\n");
+    int* a = (int*)my_malloc(sizeof(int) * 10);  // 40 bytes
+    char* b = (char*)my_malloc(100);
+    double* c = (double*)my_malloc(sizeof(double) * 5);  // 40 bytes
+    print_memory_state();
+
+    // Test 2: Use the allocated memory
+    printf("--- Test 2: Using Allocated Memory ---\n");
+    if (a) {
+        a[0] = 42;
+        a[9] = 99;
+        printf("a[0] = %d, a[9] = %d\n", a[0], a[9]);
+    }
+    if (b) {
+        strcpy(b, "Hello from custom allocator!");
+        printf("b = \"%s\"\n", b);
+    }
+    printf("\n");
+
+    // Test 3: Free some memory
+    printf("--- Test 3: Freeing Memory ---\n");
+    my_free(b);
+    print_memory_state();
+    
+    // Test 4: Free more and watch coalescing
+    printf("--- Test 4: Coalescing ---\n");
+    my_free(a);
+    print_memory_state();
+
+    my_free(c);
+    print_memory_state();
+
+    // Test 5: Allocate after freeing
+    printf("--- Test 5: Reuse Freed Memory ---\n");
+    char* d = (char*)my_malloc(200);
+    if (d) {
+        strcpy(d, "Reusing freed memory!");
+        printf("d = \"%s\"\n", d);
+    }
+    print_memory_state();
+
+    // Test 6: Allocation failure
+    printf("--- Test 6: Allocation Failure ---\n");
+    void* huge = my_malloc(10000);  // Too large
+    if (!huge) {
+        printf("Allocation failed as expected (requested too much)\n");
+    }
+    print_memory_state();
+
+    my_free(d);
+    print_memory_state();
+
     return 0;
 }
