@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 /******************
@@ -11,11 +12,19 @@
 #define POOL_SIZE 4096 // 4kb memory pool
 #define MIN_BLOCK_SIZE 32// Minimum size for splitting
 
-// Block header structure
-// Metadata for each memory block
+/*
+ * Block header structure (24 bytes total)
+ *
+ * Layout is carefully designed for alignment:
+ * - size_t (8 bytes) naturally aligns to 8-byte boundary
+ * - is_free only needs 1 byte (boolean), saving 3 bytes vs int
+ * - Explicit padding ensures 'next' pointer is 8-byte aligned
+ * - Total overhead: 24 bytes per block
+ */
 typedef struct block_header {
     size_t size;                // Size without header
-    int is_free;                // Boolean
+    uint8_t is_free;            // Boolean
+    uint8_t padding[7];         // 7 bytes explicit padding.
     struct block_header* next;  // Pointer to next block in the list
 } block_header_t;
 
