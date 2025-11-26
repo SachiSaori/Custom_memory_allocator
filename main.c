@@ -8,9 +8,12 @@
  * Allocator code *
  ******************/
 
-// pool and block size
-#define POOL_SIZE 4096 // 4kb memory pool
-#define MIN_BLOCK_SIZE 32// Minimum size for splitting
+#define POOL_SIZE 4096              // 4kb memory pool
+#define MIN_BLOCK_SIZE 32           // Minimum size for splitting
+#define BLOCK_MAGIC 0xDEADBEEF      // Valid allocated block
+#define FREED_MAGIC 0xFEEDFACE      // Block has been freed
+#define CANARY_VALUE 0xDEADC0DE
+#define ALIGNMENT 8                 // Minimum to respect alignment.
 
 /*
  * Block header structure (24 bytes total)
@@ -22,16 +25,20 @@
  * - Total overhead: 24 bytes per block
  */
 typedef struct block_header {
-    size_t size;                // Size without header
-    uint8_t is_free;            // Boolean
-    uint8_t padding[7];         // 7 bytes explicit padding.
+    unsigned int magic;
+    uint8_t is_free;
+    uint8_t padding[3];         // 3 bytes explicit padding.
+    size_t size;
     struct block_header* next;  // Pointer to next block in the list
 } block_header_t;
-
 
 static char memory_pool[POOL_SIZE];
 static block_header_t* free_list_head = NULL;
 static int initialized = 0; // False
+
+size_t align_size(size_t size) {
+    return (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+}
 
 // Allocator initiation
 void init_allocator() {
@@ -40,20 +47,22 @@ void init_allocator() {
     // Treat start of pool as the first header
     free_list_head = (block_header_t*)memory_pool;
     free_list_head->size = POOL_SIZE - sizeof(block_header_t);
-    free_list_head->is_free = 1; // True
+    free_list_head->is_free = 1;
     free_list_head->next = NULL;
+    free_list_head->magic = FREED_MAGIC;
 
-    initialized = 1; // True
+    initialized = 1;
     printf("[INIT] Allocator initialized with %zu bytes\n", free_list_head->size);
 }
 
 // Custom malloc implementation
 void* my_malloc(size_t size) {
-    if (!initialized) init_allocator(); // Init if not done yet.
-    if (size == 0) return NULL; // Can't allocate if no room.
+    if (!initialized) init_allocator();
+    if (size == 0) return NULL;
 
-    // Align size to 8 bytes for better performance
-    size = (size + 7) & ~7;
+    size = align_size(size);
+
+    size_t actual_size = size + sizeof(unsigned int);
 
     block_header_t* current = free_list_head;
 
@@ -70,6 +79,7 @@ void* my_malloc(size_t size) {
                 new_block->size = current->size - size - sizeof(block_header_t);
                 new_block->is_free = 1; // True
                 new_block->next = current->next;
+                new_block->magic = FREED_MAGIC;
 
                 // Update current block
                 current->size = size;
@@ -78,12 +88,14 @@ void* my_malloc(size_t size) {
                 printf("[SPLIT] Split block: allocated=%zu, remaining=%zu\n", size, new_block->size);
             }
 
-            // Mark block as not free
+
             current->is_free = 0;
 
             // Return pointer to data area (skip header)
             void* ptr = (char*)current + sizeof(block_header_t);
             printf("[ALLOC] Returning pointer %p\n", ptr);
+            current->magic = BLOCK_MAGIC; // Valid allocated Block.
+
             return ptr;
         }
         current = current->next;
@@ -101,7 +113,17 @@ void my_free(void* ptr) {
     // Get header from user pointer
     block_header_t* header = (block_header_t*) ((char*)ptr - sizeof(block_header_t));
 
-    // Mark as free
+    if (header->magic == FREED_MAGIC) {
+        printf("[ERROR] Double free detected at %p!\n", ptr);
+        return;
+    }
+
+    if (header->magic != BLOCK_MAGIC) {
+        printf("[ERROR] Invalid pointer passed to my_free: %p\n", ptr);
+        return;
+    }
+
+    header->magic = FREED_MAGIC;
     header->is_free = 1;
 
     // Coalesce with next block if it's free
@@ -153,22 +175,21 @@ void print_memory_state() {
     printf("Total used: %zu bytes\n", total_allocated);
     printf("===================\n\n");
 }
+
 /*********************
  * Test program code *
  *********************/
-
 int main() {
     printf("Custom Memory Allocator Test\n");
     init_allocator();
 
-    // Test 1: Allocate some memory
     printf("--- Test 1: Basic Allocation ---\n");
-    int* a = (int*)my_malloc(sizeof(int) * 10);  // 40 bytes
-    char* b = (char*)my_malloc(100);
-    double* c = (double*)my_malloc(sizeof(double) * 5);  // 40 bytes
+    int* a = my_malloc(sizeof(int) * 10);  // 40 bytes
+    char* b = my_malloc(100);
+    double* c = my_malloc(sizeof(double) * 5);  // 40 bytes
+    int* e = my_malloc(sizeof(int) * 10);
     print_memory_state();
 
-    // Test 2: Use the allocated memory
     printf("--- Test 2: Using Allocated Memory ---\n");
     if (a) {
         a[0] = 42;
@@ -181,12 +202,10 @@ int main() {
     }
     printf("\n");
 
-    // Test 3: Free some memory
     printf("--- Test 3: Freeing Memory ---\n");
     my_free(b);
     print_memory_state();
-    
-    // Test 4: Free more and watch coalescing
+
     printf("--- Test 4: Coalescing ---\n");
     my_free(a);
     print_memory_state();
@@ -194,21 +213,25 @@ int main() {
     my_free(c);
     print_memory_state();
 
-    // Test 5: Allocate after freeing
     printf("--- Test 5: Reuse Freed Memory ---\n");
-    char* d = (char*)my_malloc(200);
+    char* d = my_malloc(200);
     if (d) {
         strcpy(d, "Reusing freed memory!");
         printf("d = \"%s\"\n", d);
     }
     print_memory_state();
 
-    // Test 6: Allocation failure
     printf("--- Test 6: Allocation Failure ---\n");
     void* huge = my_malloc(10000);  // Too large
     if (!huge) {
         printf("Allocation failed as expected (requested too much)\n");
     }
+    print_memory_state();
+
+    printf("--- Test 7: Double Free ---\n");
+    my_free(e);
+    my_free(e);
+
     print_memory_state();
 
     my_free(d);
