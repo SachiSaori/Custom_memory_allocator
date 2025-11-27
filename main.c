@@ -92,7 +92,7 @@ void* my_malloc(size_t size) {
             void* ptr = (char*)current + sizeof(block_header_t);
 
             // Place canary at the END of the user's data
-            unsigned int* end_canary = (unsigned int*)ptr + size;
+            unsigned int* end_canary = (unsigned int*)((char*)ptr + size);
             *end_canary = CANARY_VALUE;
 
             printf("[ALLOC] Returning pointer %p (canary placed at offset %zu)\n", ptr, size);
@@ -124,7 +124,7 @@ void my_free(void* ptr) {
     }
 
     // Check end canary for buffer overflow
-    unsigned int* end_canary = (unsigned int*)(ptr + header->size - sizeof(unsigned int));
+    unsigned int* end_canary = (unsigned int*)((char*)ptr + header->size - sizeof(unsigned int));
     if (*end_canary != CANARY_VALUE) {
         printf("[ERROR] Buffer overflow detected at %p! Canary was 0x%X, expected 0x%X\n",ptr, *end_canary, CANARY_VALUE);
         // Continue to free, but user knows there was corruption.
