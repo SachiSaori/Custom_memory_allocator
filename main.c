@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <string.h>
-#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -32,7 +31,7 @@ typedef struct block_header {
     struct block_header* next;  // Pointer to next block in the list
 } block_header_t;
 
-static char memory_pool[POOL_SIZE];
+alignas(16) static char memory_pool[POOL_SIZE];
 static block_header_t* free_list_head = NULL;
 static int initialized = 0; // False
 
@@ -61,41 +60,42 @@ void* my_malloc(size_t size) {
     if (size == 0) return NULL;
 
     size = align_size(size);
-
     size_t actual_size = size + sizeof(unsigned int);
 
     block_header_t* current = free_list_head;
 
     // First-fit strategy: find first block that's big enough.
     while (current != NULL) {
-        if (current ->is_free && current->size >= size) {
+        if (current ->is_free && current->size >= actual_size) {
             printf("[ALLOC] Found free block: size=%zu at %p\n", current->size, (void*)current);
 
             // Should block be split?
             // Only split if remaining space is useful (> MIN_BLOCK_SIZE)
-            if (current->size >= size + sizeof(block_header_t) + MIN_BLOCK_SIZE) {
-                block_header_t* new_block = (block_header_t*) ((char*)current + sizeof(block_header_t) + size);
+            if (current->size >= actual_size + sizeof(block_header_t) + MIN_BLOCK_SIZE) {
+                block_header_t* new_block = (block_header_t*) ((char*)current + sizeof(block_header_t) + actual_size);
 
-                new_block->size = current->size - size - sizeof(block_header_t);
+                new_block->size = current->size - actual_size - sizeof(block_header_t);
                 new_block->is_free = 1; // True
                 new_block->next = current->next;
                 new_block->magic = FREED_MAGIC;
 
                 // Update current block
-                current->size = size;
+                current->size = actual_size;
                 current->next = new_block;
 
                 printf("[SPLIT] Split block: allocated=%zu, remaining=%zu\n", size, new_block->size);
             }
-
-
             current->is_free = 0;
+            current->magic = BLOCK_MAGIC; // Valid allocated Block.
 
             // Return pointer to data area (skip header)
             void* ptr = (char*)current + sizeof(block_header_t);
-            printf("[ALLOC] Returning pointer %p\n", ptr);
-            current->magic = BLOCK_MAGIC; // Valid allocated Block.
 
+            // Place canary at the END of the user's data
+            unsigned int* end_canary = (unsigned int*)ptr + size;
+            *end_canary = CANARY_VALUE;
+
+            printf("[ALLOC] Returning pointer %p (canary placed at offset %zu)\n", ptr, size);
             return ptr;
         }
         current = current->next;
@@ -121,6 +121,15 @@ void my_free(void* ptr) {
     if (header->magic != BLOCK_MAGIC) {
         printf("[ERROR] Invalid pointer passed to my_free: %p\n", ptr);
         return;
+    }
+
+    // Check end canary for buffer overflow
+    unsigned int* end_canary = (unsigned int*)(ptr + header->size - sizeof(unsigned int));
+    if (*end_canary != CANARY_VALUE) {
+        printf("[ERROR] Buffer overflow detected at %p! Canary was 0x%X, expected 0x%X\n",ptr, *end_canary, CANARY_VALUE);
+        // Continue to free, but user knows there was corruption.
+    } else {
+        printf("[CANARY] Buffer overflow check passed\n");
     }
 
     header->magic = FREED_MAGIC;
@@ -231,7 +240,21 @@ int main() {
     printf("--- Test 7: Double Free ---\n");
     my_free(e);
     my_free(e);
+    print_memory_state();
 
+    printf("--- Test 8: Buffer Overflow Detection ---\n");
+    int* overflow_test = my_malloc(10 * sizeof(int));  // 40 bytes
+    if (overflow_test) {
+        // Write within bounds - OK
+        overflow_test[0] = 1;
+        overflow_test[9] = 10;
+
+        // Write OUT of bounds - corrupts canary!
+        overflow_test[12] = 999;  // 12 * 4 = 48 bytes (past the 40 allocated)
+
+        printf("Attempting to free buffer with overflow...\n");
+        my_free(overflow_test);  // Should detect corruption!
+    }
     print_memory_state();
 
     my_free(d);
