@@ -31,6 +31,8 @@ typedef struct block_header {
     struct block_header* next;  // Pointer to next block in the list
 } block_header_t;
 
+// 16-byte alignment ensures compatibility with SIMD operations
+// and provides extra safety margin for all common data types
 alignas(16) static char memory_pool[POOL_SIZE];
 static block_header_t* free_list_head = NULL;
 static int initialized = 0; // False
@@ -61,6 +63,7 @@ void* my_malloc(size_t size) {
 
     size = align_size(size);
     size_t actual_size = size + sizeof(unsigned int);
+    actual_size = align_size(actual_size);
 
     block_header_t* current = free_list_head;
 
@@ -256,6 +259,18 @@ int main() {
         my_free(overflow_test);  // Should detect corruption!
     }
     print_memory_state();
+
+    printf("--- Test 9: Alignment Verification ---\n");
+    for (int i = 0; i < 5; i++) {
+        void* ptr = my_malloc(40);
+        printf("Allocated pointer: %p (address mod 8 = %lu)\n",
+               ptr, (unsigned long)ptr % 8);
+        if ((unsigned long)ptr % 8 != 0) {
+            printf("❌ MISALIGNED!\n");
+        } else {
+            printf("✓ Aligned\n");
+        }
+    }
 
     my_free(d);
     print_memory_state();
