@@ -6,7 +6,7 @@
 Educational implementation using a fixed static memory pool.
 - Simple and portable
 - Demonstrates core concepts
-- Perfect for learning
+- Perfect for learning the basics of memory allocation
 
 [See allocator_static.c]
 
