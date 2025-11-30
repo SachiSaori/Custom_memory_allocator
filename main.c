@@ -29,6 +29,7 @@ typedef struct block_header {
     uint8_t padding[3];         // 3 bytes explicit padding.
     size_t size;
     struct block_header* next;  // Pointer to next block in the list
+    unsigned int start_canary; // To prevent buffer underflow. You already had check for overflow, but not for overflow
 } block_header_t;
 
 // 16-byte alignment ensures compatibility with SIMD operations
@@ -51,6 +52,10 @@ void init_allocator() {
     free_list_head->is_free = 1;
     free_list_head->next = NULL;
     free_list_head->magic = FREED_MAGIC;
+    free_list_head->start_canary = CANARY_VALUE //Your start_canary for first block
+    
+    unsigned int* end_canary = (unsigned int*)((char*)free_list_head + sizeof(block_header_t) + free_list_head->size);
+    *end_canary = CANARY_VALUE;
 
     initialized = 1;
     printf("[INIT] Allocator initialized with %zu bytes\n", free_list_head->size);
@@ -60,6 +65,9 @@ void init_allocator() {
 void* my_malloc(size_t size) {
     if (!initialized) init_allocator();
     if (size == 0) return NULL;
+    
+    if (size > SIZE_MAX - sizeof(block_header_t) - sizeof(unsigned int))
+    	return NULL; //You should check if someone trying to allocate Very Large Size. Cuz it can be cause WrapAround.
 
     size = align_size(size);
     size_t actual_size = size + sizeof(unsigned int);
@@ -77,10 +85,11 @@ void* my_malloc(size_t size) {
             if (current->size >= actual_size + sizeof(block_header_t) + MIN_BLOCK_SIZE) {
                 block_header_t* new_block = (block_header_t*) ((char*)current + sizeof(block_header_t) + actual_size);
 
-                new_block->size = current->size - actual_size - sizeof(block_header_t);
+                new_block->size = current->size - actual_size - sizeof(block_header_t) - sizeof(unsigned int); //Edited: previous version worked only with payload, not with header
                 new_block->is_free = 1; // True
                 new_block->next = current->next;
                 new_block->magic = FREED_MAGIC;
+                new_block->start_canary = CANARY_VALUE;
 
                 // Update current block
                 current->size = actual_size;
@@ -125,6 +134,11 @@ void my_free(void* ptr) {
         printf("[ERROR] Invalid pointer passed to my_free: %p\n", ptr);
         return;
     }
+    
+    //This is why we need start canary. You previously had only overflow detection, this is underflow detection
+    if (header->start_canary != CANARY_VALUE) {
+    	printf("[ERROR] Buffer underflow detected at %p! Start canary corrupted.\n", ptr);
+	}
 
     // Check end canary for buffer overflow
     unsigned int* end_canary = (unsigned int*)((char*)ptr + header->size - sizeof(unsigned int));
